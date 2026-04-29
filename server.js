@@ -286,8 +286,63 @@ app.post("/mcp", (req, res) => {
   return res.json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
 });
 
-// GET /v1/base-bridge/quote
-app.get("/v1/base-bridge/quote", (req, res) => {
+// ── BOGO redemption middleware (X-Hive-BOGO-Token) ─────────────────────────
+// Phase 1: calls hive-gamification /v1/bogo/redeem; bypasses 402 on consumed:true.
+// Phase 2 (planned): zero-trust redemption with token-bound HMAC.
+async function bogoRedeemMiddleware(req, res, next) {
+  const token = req.headers["x-hive-bogo-token"];
+  if (!token) return next();
+  try {
+    const r = await fetch("https://hive-gamification.onrender.com/v1/bogo/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, mechanic_id: "base-bridge-quote" }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (r.ok) {
+      const j = await r.json();
+      if (j.consumed === true) {
+        req._bogo_redeemed = true;
+        import("fs").then(({ appendFileSync }) => {
+          try { appendFileSync("/tmp/base_bridge_bogo_redemptions.jsonl", JSON.stringify({ token: token.slice(0, 12), mechanic_id: "base-bridge-quote", ts: Date.now() }) + "\n"); } catch (_) {}
+        });
+        return next();
+      }
+    }
+  } catch (_) {}
+  return next();
+}
+
+// GET /v1/base-bridge/quote — x402-gated ($0.20 USDC) with BOGO bypass
+app.get("/v1/base-bridge/quote", bogoRedeemMiddleware, (req, res) => {
+  // 402 gate ($0.20 USDC). BOGO token bypasses once.
+  if (!req._bogo_redeemed) {
+    const paymentHeader = req.headers["x-payment"] || req.headers["x-payment-receipt"];
+    if (!paymentHeader) {
+      return res.status(402).json({
+        x402Version: 1,
+        error: "Payment required",
+        accepts: [{
+          scheme: "exact",
+          network: "base",
+          chainId: 8453,
+          asset: "USDC",
+          contract: BASE_USDC_CONTRACT,
+          maxAmountRequired: "200000", // $0.20 USDC atomic
+          payTo: MONROE_EVM,
+          resource: "/v1/base-bridge/quote",
+          description: "Base bridge quote — $0.20 USDC on Base mainnet",
+          mimeType: "application/json",
+        }],
+        bogo: {
+          first_use_free: true,
+          claim_endpoint: "https://hive-gamification.onrender.com/v1/bogo/claim",
+          redeem_header: "X-Hive-BOGO-Token",
+          mechanic_id: "base-bridge-quote",
+        },
+      });
+    }
+  }
   const { direction, amount_usdc } = req.query;
   if (!["base_to_solana", "solana_to_base"].includes(direction)) {
     return res.status(400).json({
