@@ -1,0 +1,45 @@
+name: hive-base-bridge
+description: Solana to Base and Base to Solana USDC agent payments in one call. 12 bps + $0.02 per hop. Phase 1 quote and route ledger. Phase 2 on-chain CCTP v2 execution via authorized routing wallet.
+version: 1.0.0
+author: Steve Rotzin
+license: MIT
+repository: https://github.com/srotzin/hive-base-bridge
+homepage: https://hive-base-bridge.onrender.com
+tags:
+  - finance
+  - payments
+  - bridge
+  - solana
+  - base
+  - usdc
+  - cctp
+  - x402
+  - agent
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      HMAC_SECRET:
+        type: string
+        description: HMAC secret for quote ID signing. Auto-generated if not set.
+      PORT:
+        type: string
+        description: HTTP port. Default 3000.
+    required: []
+  commandFunction: |
+    (config) => ({
+      command: "node",
+      args: ["server.js"],
+      env: {
+        ...(config.HMAC_SECRET ? { HMAC_SECRET: config.HMAC_SECRET } : {}),
+        ...(config.PORT ? { PORT: config.PORT } : {})
+      }
+    })
+tools:
+  - name: quote_bridge
+    description: Get a price quote for a Solana to Base or Base to Solana USDC transfer. Returns fee breakdown and a time-limited quote ID.
+  - name: submit_bridge
+    description: Submit a bridge transfer. Requires x402 payment in the source asset to the source-side Hive treasury.
+  - name: get_bridge_status
+    description: Check the status of a submitted bridge settlement by settlement ID.
